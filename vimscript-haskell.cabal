@@ -46,6 +46,13 @@ category:            Language
 -- README.
 extra-source-files:  README.md
 
+executable vimscript-haskell-exe
+  main-is:          src/Main.hs
+  build-depends:
+    vimscript-haskell
+    , base
+
+  default-language: Haskell2010
 
 library
   -- Modules exported by the library.
