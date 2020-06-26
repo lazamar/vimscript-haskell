@@ -1,11 +1,28 @@
 # Little snippet from Niv to get our pinned dependencies
-{ sources ? import ./nix/sources.nix }:
+{ sources ? import ./nix/sources.nix,
+  compiler ? "ghc882"
+}:
 with { overlay = _: pkgs: { niv = import sources.niv {}; }; };
+
 let
-    pkgs = import sources.nixpkgs {};
+    #gitignoreSource = (import sources.gitignore { lib = pkgs.lib; }).gitignoreSource;
 
-    gitignoreSource = (import sources.gitignore { lib = pkgs.lib; }).gitignoreSource;
+    config = {
+        packageOverrides = pkgs: rec {
+            haskell = pkgs.haskell // {
+                packages = pkgs.haskell.packages // {
+                    "${compiler}" = pkgs.haskell.packages."${compiler}".override {
+                        overrides = haskellPackagesNew: haskellPackagesOld: rec {
+                            vimscript-haskell =
+                              haskellPackagesNew.callCabal2nix "vimscript-haskell" (./.) {};
+                        };
+                    };
+                };
+            };
+        };
+    };
 
-    vimscript-haskell = pkgs.haskellPackages.callCabal2nix "vimscript-haskell" (gitignoreSource ./.) {};
+    pkgs = import sources.nixpkgs { inherit config; };
+
 in
-    vimscript-haskell
+    pkgs.haskell.packages.${compiler}.vimscript-haskell
