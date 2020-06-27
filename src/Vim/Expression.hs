@@ -6,6 +6,7 @@
 
 module Vim.Expression where
 
+import Control.Monad (replicateM)
 import Control.Monad.Writer.Lazy (WriterT, tell, MonadWriter, runWriterT)
 import Control.Monad.Reader (ReaderT, MonadReader, local, ask, runReaderT)
 import Control.Monad.Trans (MonadTrans)
@@ -99,8 +100,10 @@ class Monad m => MonadVim m where
     getDepth    :: m Depth
     eval        :: Depth -> m a -> (a, [Statement])
 
-define :: forall m a b. MonadVim m => (Expr a -> m (Expr b)) -> m (Expr a -> Expr b)
-define f = do
+define1 :: MonadVim m
+    => (Expr a -> m (Expr b))
+    -> m (Expr a -> Expr b)
+define1 f = do
     argName <- makeVarName Argument
     fname   <- makeFunName
     depth   <- getDepth
@@ -109,3 +112,35 @@ define f = do
 
     statement $ DefineFunc fname [argName] $ statements ++ [Return $ Arg result]
     return $ \a -> App (Func fname) [Arg a]
+
+define2 :: MonadVim m
+    => (Expr a -> Expr b -> m (Expr c))
+    -> m (Expr a -> Expr b -> Expr c)
+define2 f = do
+    argName1 <- makeVarName Argument
+    argName2 <- makeVarName Argument
+    fname <- makeFunName
+    depth <- getDepth
+    let body = f (Var Argument argName1)
+                 (Var Argument argName2)
+        (result, statements) = eval (succ depth) body
+    statement $ DefineFunc fname [argName1, argName2] $ statements ++ [Return $ Arg result]
+    return $ \a b -> App (Func fname) [Arg a, Arg b]
+
+define3 :: MonadVim m
+    => (Expr a -> Expr b -> Expr c -> m (Expr d))
+    -> m (Expr a -> Expr b -> Expr c -> Expr d)
+define3 f = do
+    argName1 <- makeVarName Argument
+    argName2 <- makeVarName Argument
+    argName3 <- makeVarName Argument
+    fname <- makeFunName
+    depth <- getDepth
+    let body = f (Var Argument argName1)
+                 (Var Argument argName2)
+                 (Var Argument argName3)
+        (result, statements) = eval (succ depth) body
+    statement
+        $ DefineFunc fname [argName1, argName2, argName3]
+        $ statements ++ [Return $ Arg result]
+    return $ \a b c -> App (Func fname) [Arg a, Arg b, Arg c]
