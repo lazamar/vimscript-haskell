@@ -13,6 +13,8 @@ in
     # withHoogle = true;
     buildInputs = with pkgs.haskellPackages; [
       cabal-install #  Make sure we are using cabal version 3
+      ghcid
+      pkgs.haskell.packages.ghc882.ghcide
     ];
 
     # Prevents cabal from choosing alternate plans, so that
