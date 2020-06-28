@@ -17,10 +17,9 @@ import qualified Prelude as P
 import Prelude hiding (Ord(..), Eq(..))
 import Control.Monad.Writer.Lazy (WriterT, tell, MonadWriter, runWriterT, pass)
 import Control.Monad.Reader (ReaderT, MonadReader, ask, runReaderT, local)
-import Control.Monad.State.Lazy (MonadState, StateT, evalStateT, state, withState, get, put)
-import Control.Monad.Error (MonadError, Error(..), ErrorT, runErrorT, throwError)
+import Control.Monad.State.Lazy (MonadState, StateT, evalStateT, state, get, put)
+import Control.Monad.Except (MonadError, ExceptT, runExceptT, throwError)
 import Data.Functor.Identity (Identity, runIdentity)
-import Data.Traversable (for)
 import Data.List (intercalate)
 import Data.String (IsString(..))
 import Numeric.Natural (Natural)
@@ -73,10 +72,6 @@ data Err
     | CodeGenError CodeGenError
     | Unknown String
 
-instance Error Err where
-    noMsg = Unknown "An unknown error occurred"
-    strMsg = Unknown
-
 data EvaluationError
     = NotFunction String Arg
 
@@ -90,7 +85,7 @@ newtype Depth = Depth Int
     deriving newtype (P.Eq, P.Ord, Num, Enum)
 
 newtype Vim a = Vim
-    ( ErrorT Err
+    ( ExceptT Err
     ( WriterT [Statement] --  ^ Our vim statements up to now
     ( ReaderT Depth       --  ^ How many functions we are
     ( StateT  FunState    --  ^ Modifiable function-specific data
@@ -124,15 +119,15 @@ instance MonadVim Vim where
             (vname , s { funCount = succ count })
     getDepth = ask
     eval' (depth, fstate) f
-        = localState (const fstate)
+        = localState fstate
         . local (const depth)
         . pass
         . fmap (\res -> (res, f res))
         where
             -- | Run action with modified state and restore initial state at the end.
-            localState f action = do
+            localState loc action = do
                 s <- get
-                put $ f s
+                put loc
                 res <- action
                 put s
                 return res
@@ -259,9 +254,9 @@ define3 f = do
         handleBody res statements =
             pure
                 $ DefineFunc fname [argName1, argName2, argName3]
-                $ statements ++ [Return $ A res]
+                $ statements ++ [Return $ A res] -- Add return statement
 
-    eval' (succ depth, FunState 0 0) handleBody body
+    _ <- eval' (succ depth, FunState 0 0) handleBody body
     return $ \a b c -> App fname [A a, A b, A c]
 
 --------------------------------------------------------------------------------
@@ -301,7 +296,7 @@ generateCode (Vim vim)
     . flip evalStateT (FunState 0 0)
     . flip runReaderT (Depth 0)
     . runWriterT
-    . runErrorT
+    . runExceptT
     $ vim
 
 gen :: Depth -> Statement -> [String]
