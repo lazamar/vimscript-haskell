@@ -4,9 +4,17 @@
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE FunctionalDependencies #-}
 
 module Vim.Expression where
 
+import qualified Prelude as P
+
+import Prelude (Int, String, Show, Num(..), Enum, Applicative, Functor, Monad, Bool(..),
+                (.), ($), pure, concat, show, succ, flip, (++), return, error, (<>),
+                map, unwords, concatMap)
 import Control.Monad.Writer.Lazy (WriterT, tell, MonadWriter, runWriterT)
 import Control.Monad.Reader (ReaderT, MonadReader, ask, runReaderT)
 import Control.Monad.State.Lazy (MonadState, StateT, evalStateT, state)
@@ -17,8 +25,10 @@ import Data.List (intercalate)
 data Expr a
     = LInt Int
     | LStr String
+    | LBool Bool
+    | LList [Expr a]
     | Var Scope String
-    | App (Func a) [Argument]
+    | App String [Arg]
 
 -- | Scope of a variable
 data Scope
@@ -28,17 +38,14 @@ data Scope
     | Tab
     | VimSpecial
 
--- | A function reference
-data Func a = Func String
-
 -- | A function argument of any type
-data Argument where
-    Arg :: forall a. Expr a -> Argument
+data Arg where
+    A :: forall a. Expr a -> Arg
 
 data Statement
     = DefineFunc String [String] [Statement]
-    | Call String [Argument]
-    | Return Argument
+    | Call String [Arg]
+    | Return Arg
 
 -- Evaluation
 
@@ -49,7 +56,7 @@ data FunState = FunState
 
 newtype Depth = Depth Int
     deriving (Show)
-    deriving newtype (Eq, Ord, Num, Enum)
+    deriving newtype (P.Eq, P.Ord, Num, Enum)
 
 newtype Vim a = Vim
     ( WriterT [Statement] --  ^ Our vim statements up to now
@@ -98,7 +105,66 @@ class Monad m => MonadVim m where
     getDepth    :: m Depth
     eval        :: Depth -> m a -> (a, [Statement])
 
+--------------------------------------------------------------------------------
 -- Combinators
+
+unaryOp :: String -> Expr a -> Expr b
+unaryOp  name arg = App name [A arg]
+
+binOp :: String -> Expr a -> Expr b -> Expr c
+binOp name arg1 arg2 = App name [A arg1, A arg2]
+
+class Boolean a where
+    false :: a
+    true  :: a
+    (&&)  :: a -> a -> a
+    (||)  :: a -> a -> a
+    not   :: a -> a
+
+instance Boolean (Expr Bool) where
+    false = LBool False
+    true  = LBool True
+    (&&)  = binOp "&&"
+    (||)  = binOp "||"
+    not   = unaryOp "not"
+
+class (Boolean a) => Cond a b | b -> a where
+    cond :: a -> b -> b -> b
+
+instance Cond (Expr Bool) (Expr a) where
+    cond c a b = App "ternary" [A c, A a, A b]
+
+class (Boolean b) => Eq a b | a -> b where
+     (==) :: a -> a -> b
+
+instance Eq (Expr a) (Expr Bool) where
+    a == b = App "==#" [A a, A b]
+
+-- TODO: Add LT and GT as optionally included module variables
+class (Boolean b) => Ord a b | a -> b where
+    (< ) :: a -> a -> b
+    (<=) :: a -> a -> b
+    (> ) :: a -> a -> b
+    (>=) :: a -> a -> b
+    max  :: a -> a -> a
+    min  :: a -> a -> a
+
+instance Ord (Expr a) (Expr Bool) where
+    (< )    = binOp "<"
+    (<=)    = binOp "<="
+    (> )    = binOp ">"
+    (>=)    = binOp ">="
+    max a b = unaryOp "max" $ LList [a,b]
+    min a b = unaryOp "min" $ LList [a,b]
+
+instance (Num a) => Num (Expr a) where
+    x + y         = App "+" [A x, A y]
+    x - y         = App "-" [A x, A y]
+    x * y         = App "*" [A x, A y]
+    negate x      = x * (-1)
+    abs    x      = App "abs"    [A x]
+    signum x      = cond (x == 0) 0 (cond (x > 0) 1 (-1))
+    fromInteger x = LInt (P.fromInteger x)
 
 str :: String -> Expr String
 str = LStr
@@ -116,8 +182,8 @@ define1 f = do
     let body = f (Var Argument argName)
         (result, statements) = eval (succ depth) body
 
-    statement $ DefineFunc fname [argName] $ statements ++ [Return $ Arg result]
-    return $ \a -> App (Func fname) [Arg a]
+    statement $ DefineFunc fname [argName] $ statements ++ [Return $ A result]
+    return $ \a -> App fname [A a]
 
 define2 :: MonadVim m
     => (Expr a -> Expr b -> m (Expr c))
@@ -130,8 +196,8 @@ define2 f = do
     let body = f (Var Argument argName1)
                  (Var Argument argName2)
         (result, statements) = eval (succ depth) body
-    statement $ DefineFunc fname [argName1, argName2] $ statements ++ [Return $ Arg result]
-    return $ \a b -> App (Func fname) [Arg a, Arg b]
+    statement $ DefineFunc fname [argName1, argName2] $ statements ++ [Return $ A result]
+    return $ \a b -> App fname [A a, A b]
 
 define3 :: MonadVim m
     => (Expr a -> Expr b -> Expr c -> m (Expr d))
@@ -148,19 +214,19 @@ define3 f = do
         (result, statements) = eval (succ depth) body
     statement
         $ DefineFunc fname [argName1, argName2, argName3]
-        $ statements ++ [Return $ Arg result]
-    return $ \a b c -> App (Func fname) [Arg a, Arg b, Arg c]
+        $ statements ++ [Return $ A result]
+    return $ \a b c -> App fname [A a, A b, A c]
 
 -- Stdlib
 
 -- | Print something
 echo :: MonadVim m => Expr String -> m ()
-echo = statement . Call "echo" . pure . Arg
+echo = statement . Call "echo" . pure . A
 
 -- | Call a function only for its effects.
 call :: MonadVim m => Expr a -> m ()
 call e = case e of
-    App _ _ -> statement $ Call "call" [Arg e]
+    App _ _ -> statement $ Call "call" [A e]
     _ -> error "Executing a `call` statement on something that is not a function"
 
 -- Code Generation
@@ -179,10 +245,12 @@ gen d = \case
     Call fun args ->
         pure $ unwords $ fun : map genE args
 
-genE :: Argument -> String
-genE (Arg e) = case e of
+genE :: Arg -> String
+genE (A e) = case e of
     LInt v -> show v
     LStr v -> "\"" <> v <> "\""
+    LBool v -> if v then "1" else "0"
+    LList exs -> "[ " <> intercalate "," (map (genE . A) exs) <> " ]"
     Var scope vname ->
         let scopeLetter = case scope of
                 Argument   -> "a"
@@ -192,16 +260,30 @@ genE (Arg e) = case e of
                 VimSpecial -> "v"
         in
         scopeLetter <> ":" <> vname
-    App (Func "+") [a, b] -> unwords [genE a, "+", genE b]
-    App (Func "-") [a, b] -> unwords [genE a, "+", genE b]
-    App (Func fun) args -> fun <> parenthesize (map genE args)
+    App "+"  [_,_] -> binInfix e
+    App "-"  [_,_] -> binInfix e
+    App "&&" [_,_] -> binInfix e
+    App "||" [_,_] -> binInfix e
+    App "not" [a] -> genE $ A $ App "ternary" [a, A $ LBool False, A $ LBool True]
+    App "<"  [_,_] -> binInfix e
+    App "<=" [_,_] -> binInfix e
+    App ">"  [_,_] -> binInfix e
+    App ">=" [_,_] -> binInfix e
+    App "ternary" [c, a, b] -> parens $ unwords [genE c, "?", genE a, ":", genE b]
+    App fun args -> fun <> parenthesize (map genE args)
+    where
+        binInfix (App fun [a, b]) = unwords [genE a, fun, genE b]
+        binInfix _ = error "Incorrect number of parameters for a binary operator"
+
 
 indent :: String -> String
 indent = ("    " <>)
 
 parenthesize :: [String] -> String
-parenthesize vals = "(" <> intercalate "," vals <> ")"
+parenthesize = parens . intercalate ","
 
+parens :: String -> String
+parens s = "(" <> s <> ")"
 
 
 
