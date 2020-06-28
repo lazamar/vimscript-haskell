@@ -13,9 +13,7 @@ module Vim.Expression where
 
 import qualified Prelude as P
 
-import Prelude (Int, String, Show, Num(..), Enum, Applicative, Functor, Monad, Bool(..),
-                (.), ($), pure, concat, show, succ, flip, (++), return, error, (<>),
-                map, unwords, concatMap)
+import Prelude hiding (Ord(..), Eq(..))
 import Control.Monad.Writer.Lazy (WriterT, tell, MonadWriter, runWriterT)
 import Control.Monad.Reader (ReaderT, MonadReader, ask, runReaderT)
 import Control.Monad.State.Lazy (MonadState, StateT, evalStateT, state)
@@ -24,13 +22,22 @@ import Data.List (intercalate)
 import Data.String (IsString(..))
 
 -- | A Vimscript expression
-data Expr a
-    = LInt Int
-    | LStr String
-    | LBool Bool
-    | LList [Expr a]
-    | Var Scope String
-    | App String [Arg]
+data Expr a where
+    LInt    :: Int              -> Expr Int
+    LStr    :: String           -> Expr String
+    LBool   :: Bool             -> Expr Bool
+    LList   :: [Expr a]         -> Expr [Expr a]
+    Var     :: Scope -> String  -> Expr a
+    App     :: String -> [Arg]  -> Expr a
+
+instance Show (Expr a) where
+    show = \case
+        LInt v -> "LInt " <> show v
+        LStr v -> "LStr " <> show v
+        LBool v -> "LBool " <> show v
+        LList exprs -> "LList (" <> show exprs <> ")"
+        Var scope name -> unwords ["Var", show scope , show name]
+        App fun args -> unwords ["App", show fun, show args]
 
 -- | Scope of a variable
 data Scope
@@ -39,15 +46,20 @@ data Scope
     | Buffer
     | Tab
     | VimSpecial
+    deriving  (Show)
 
 -- | A function argument of any type
 data Arg where
     A :: forall a. Expr a -> Arg
 
+instance Show Arg where
+    show (A expr) = "A (" <> show expr <> ")"
+
 data Statement
     = DefineFunc String [String] [Statement]
     | Call String [Arg]
     | Return Arg
+    deriving (Show)
 
 --------------------------------------------------------------------------------
 -- Evaluation
@@ -160,7 +172,7 @@ instance Num a => Ord (Expr a) (Expr Bool) where
     max a b = unaryOp "max" $ LList [a,b]
     min a b = unaryOp "min" $ LList [a,b]
 
-instance (Num a) => Num (Expr a) where
+instance Num (Expr Int) where
     x + y         = App "+" [A x, A y]
     x - y         = App "-" [A x, A y]
     x * y         = App "*" [A x, A y]
@@ -238,6 +250,13 @@ call e = case e of
 
 --------------------------------------------------------------------------------
 -- Code Generation
+
+generateCode :: Vim () -> String
+generateCode
+  = unlines
+  . concatMap (gen 0)
+  . snd
+  . eval (Depth 0)
 
 gen :: Depth -> Statement -> [String]
 gen d = \case
