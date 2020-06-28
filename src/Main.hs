@@ -3,16 +3,18 @@ module Main where
 
 import Prelude hiding (Ord(..))
 import Vim.Expression
+import Control.Monad.Except
 
 import qualified Vim.Run as Vim
 
 main = do
     putStrLn "--  CODE  --"
-    putStrLn $ unCode $ Vim.getCode program
+    putStrLn $ unCode $ takeRight $ Vim.getCode program
     putStrLn "-- RESULT --"
-    res <- Vim.getResult program
+    res <-  fmap takeRight $ runExceptT $ Vim.getResult program
     putStrLn $ show res
     where
+        takeRight = either (error . show) id
         program = do
             sayHi <- define3 $ \number name1 name2 -> do
                 let some = number * 5 :: Expr Int
