@@ -7,6 +7,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module Vim.Expression where
 
@@ -20,6 +21,7 @@ import Control.Monad.Reader (ReaderT, MonadReader, ask, runReaderT)
 import Control.Monad.State.Lazy (MonadState, StateT, evalStateT, state)
 import Data.Functor.Identity (Identity, runIdentity)
 import Data.List (intercalate)
+import Data.String (IsString(..))
 
 -- | A Vimscript expression
 data Expr a
@@ -47,6 +49,7 @@ data Statement
     | Call String [Arg]
     | Return Arg
 
+--------------------------------------------------------------------------------
 -- Evaluation
 
 data FunState = FunState
@@ -149,7 +152,7 @@ class (Boolean b) => Ord a b | a -> b where
     max  :: a -> a -> a
     min  :: a -> a -> a
 
-instance Ord (Expr a) (Expr Bool) where
+instance Num a => Ord (Expr a) (Expr Bool) where
     (< )    = binOp "<"
     (<=)    = binOp "<="
     (> )    = binOp ">"
@@ -161,10 +164,13 @@ instance (Num a) => Num (Expr a) where
     x + y         = App "+" [A x, A y]
     x - y         = App "-" [A x, A y]
     x * y         = App "*" [A x, A y]
-    negate x      = x * (-1)
+    negate x      = App "-1 *" [A x] -- TODO: Fix this hack
     abs    x      = App "abs"    [A x]
     signum x      = cond (x == 0) 0 (cond (x > 0) 1 (-1))
     fromInteger x = LInt (P.fromInteger x)
+
+instance IsString (Expr String) where
+    fromString = LStr
 
 str :: String -> Expr String
 str = LStr
@@ -217,6 +223,7 @@ define3 f = do
         $ statements ++ [Return $ A result]
     return $ \a b c -> App fname [A a, A b, A c]
 
+--------------------------------------------------------------------------------
 -- Stdlib
 
 -- | Print something
@@ -229,6 +236,7 @@ call e = case e of
     App _ _ -> statement $ Call "call" [A e]
     _ -> error "Executing a `call` statement on something that is not a function"
 
+--------------------------------------------------------------------------------
 -- Code Generation
 
 gen :: Depth -> Statement -> [String]
@@ -262,6 +270,7 @@ genE (A e) = case e of
         scopeLetter <> ":" <> vname
     App "+"  [_,_] -> binInfix e
     App "-"  [_,_] -> binInfix e
+    App "*"  [_,_] -> binInfix e
     App "&&" [_,_] -> binInfix e
     App "||" [_,_] -> binInfix e
     App "not" [a] -> genE $ A $ App "ternary" [a, A $ LBool False, A $ LBool True]
@@ -284,7 +293,4 @@ parenthesize = parens . intercalate ","
 
 parens :: String -> String
 parens s = "(" <> s <> ")"
-
-
-
 
