@@ -123,14 +123,6 @@ instance MonadVim Vim where
             in
             (vname , s { funCount = succ count })
     getDepth = ask
-    eval depth (Vim vim)
-        = runIdentity
-        . flip evalStateT (FunState 0 0)
-        . flip runReaderT depth
-        . runWriterT
-        . runErrorT
-        $ vim
-
     eval' (depth, fstate) f
         = localState (const fstate)
         . local (const depth)
@@ -150,8 +142,6 @@ class MonadError Err m => MonadVim m where
     makeVarName :: Scope -> m String
     makeFunName :: m String
     getDepth    :: m Depth
-    eval        :: Depth -> m a -> (Either Err a, [Statement])
-
     -- | Transform the definition of a Vimscript program
     eval'       :: (Depth, FunState) -> (a -> [Statement] -> [Statement]) -> m a -> m a
 
@@ -302,12 +292,17 @@ data CodeGenError
 newtype Code = Code { unCode :: String }
 
 generateCode :: Vim () -> Code
-generateCode
-  = Code
-  . unlines
-  . concatMap (gen 0)
-  . snd
-  . eval (Depth 0)
+generateCode (Vim vim)
+    = Code
+    . unlines
+    . concatMap (gen 0)
+    . snd
+    . runIdentity
+    . flip evalStateT (FunState 0 0)
+    . flip runReaderT (Depth 0)
+    . runWriterT
+    . runErrorT
+    $ vim
 
 gen :: Depth -> Statement -> [String]
 gen d = \case
