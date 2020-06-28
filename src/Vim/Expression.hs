@@ -18,7 +18,7 @@ import Prelude hiding (Ord(..), Eq(..))
 import Control.Monad.Writer.Lazy (WriterT, tell, MonadWriter, runWriterT, pass)
 import Control.Monad.Reader (ReaderT, MonadReader, ask, runReaderT, local)
 import Control.Monad.State.Lazy (MonadState, StateT, evalStateT, state, get, put)
-import Control.Monad.Except (MonadError, ExceptT, runExceptT, throwError)
+import Control.Monad.Except (MonadError, ExceptT, runExceptT, throwError, runExcept)
 import Data.Functor.Identity (Identity, runIdentity)
 import Data.List (intercalate)
 import Data.String (IsString(..))
@@ -71,9 +71,12 @@ data Err
     = EvaluationError EvaluationError
     | CodeGenError CodeGenError
     | Unknown String
+    deriving (Show)
+
 
 data EvaluationError
     = NotFunction String Arg
+    deriving (Show)
 
 data FunState = FunState
     { varCount :: Int -- ^ Variables declared
@@ -283,14 +286,15 @@ data CodeGenError
     | TypeMismatch
         String  -- ^ Expected
         Arg     -- ^ Given
+    deriving (Show)
 
 newtype Code = Code { unCode :: String }
 
-generateCode :: Vim () -> Code
+generateCode :: Vim () -> Either Err Code
 generateCode (Vim vim)
-    = Code
-    . unlines
-    . concatMap (gen 0)
+    = fmap (Code . unlines . concat)
+    . runExcept
+    . traverse (gen 0)
     . snd
     . runIdentity
     . flip evalStateT (FunState 0 0)
@@ -299,26 +303,32 @@ generateCode (Vim vim)
     . runExceptT
     $ vim
 
-gen :: Depth -> Statement -> [String]
+gen :: MonadError Err m => Depth -> Statement -> m [String]
 gen d = \case
-    DefineFunc name args body ->
-        concat
+    DefineFunc name args body -> do
+        statements <- traverse (gen $ succ d) body
+        return $ concat
             [ ["function! " <> name <> "(" <> intercalate ", " args <> ")"]
-            , map indent . concatMap (gen (succ d)) $ body
+            , map indent $ concat statements
             , ["endfunction", "",""] -- Two lines after function definition
             ]
-    Return arg->
-        pure $ "return " <> genE arg
 
-    Call fun args ->
-        pure $ unwords $ fun : map genE args
+    Return arg-> do
+        res <- genE arg
+        return [ "return " ++ res ]
 
-genE :: Arg -> String
+    Call fun args -> do
+        args' <- traverse genE args
+        return $ [ unwords $ fun:args' ]
+
+genE :: MonadError Err m => Arg -> m String
 genE (A e) = case e of
-    LInt v -> show v
-    LStr v -> "\"" <> v <> "\""
-    LBool v -> if v then "1" else "0"
-    LList exs -> "[ " <> intercalate "," (map (genE . A) exs) <> " ]"
+    LInt v      -> return $ show v
+    LStr v      -> return $ "\"" <> v <> "\""
+    LBool v     -> return $ if v then "1" else "0"
+    LList exs   -> do
+        xs <- traverse (genE . A) exs
+        return $ "[ " <> intercalate "," xs <> " ]"
     Var scope vname ->
         let scopeLetter = case scope of
                 Argument   -> "a"
@@ -327,23 +337,32 @@ genE (A e) = case e of
                 Tab        -> "t"
                 VimSpecial -> "v"
         in
-        scopeLetter <> ":" <> vname
+        return $ scopeLetter <> ":" <> vname
     App "+"  [_,_] -> binInfix e
     App "-"  [_,_] -> binInfix e
     App "*"  [_,_] -> binInfix e
     App "&&" [_,_] -> binInfix e
     App "||" [_,_] -> binInfix e
-    App "not" [a] -> genE $ A $ App "ternary" [a, A $ LBool False, A $ LBool True]
+    App "not" [a]  -> genE $ A $ App "ternary" [a, A $ LBool False, A $ LBool True]
     App "<"  [_,_] -> binInfix e
     App "<=" [_,_] -> binInfix e
     App ">"  [_,_] -> binInfix e
     App ">=" [_,_] -> binInfix e
-    App "ternary" [c, a, b] -> parens $ unwords [genE c, "?", genE a, ":", genE b]
-    App fun args -> fun <> parenthesize (map genE args)
+    App "ternary" [c, a, b] -> do
+        c' <- genE c
+        a' <- genE a
+        b' <- genE b
+        return $ parens $ unwords [c', "?", a', ":", b']
+    App fun args -> do
+        args' <- traverse genE args
+        return $ fun <> parenthesize args'
     where
-        binInfix (App fun [a, b]) = unwords [genE a, fun, genE b]
-        -- binInfix (App fun args  ) = throwError $ CodeGenError $ NumArgs fun 2 $ fromIntegral $ length args
-        -- binInfix e = throwError $ CodeGenError $ TypeMismatch "function application" $ A e
+        binInfix (App fun [a, b]) = do
+            a' <- genE a
+            b' <- genE b
+            return $ unwords [a', fun, b']
+        binInfix (App fun args  ) = throwError $ CodeGenError $ NumArgs fun 2 $ fromIntegral $ length args
+        binInfix ex = throwError $ CodeGenError $ TypeMismatch "function application" $ A ex
 
 
 indent :: String -> String
