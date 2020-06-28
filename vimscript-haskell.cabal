@@ -18,7 +18,7 @@ executable vimscript-haskell-exe
 library
   exposed-modules:
     Vim.Expression
-    Vim.Test
+    Vim.Run
   --other-modules:
   ghc-options:         -Wall -Wno-partial-type-signatures
   build-depends:       base

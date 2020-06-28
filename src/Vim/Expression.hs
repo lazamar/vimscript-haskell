@@ -5,6 +5,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -17,9 +18,11 @@ import Prelude hiding (Ord(..), Eq(..))
 import Control.Monad.Writer.Lazy (WriterT, tell, MonadWriter, runWriterT)
 import Control.Monad.Reader (ReaderT, MonadReader, ask, runReaderT)
 import Control.Monad.State.Lazy (MonadState, StateT, evalStateT, state)
+import Control.Monad.Error (MonadError, Error(..), ErrorT, runErrorT, throwError)
 import Data.Functor.Identity (Identity, runIdentity)
 import Data.List (intercalate)
 import Data.String (IsString(..))
+import Numeric.Natural (Natural)
 
 -- | A Vimscript expression
 data Expr a where
@@ -64,6 +67,18 @@ data Statement
 --------------------------------------------------------------------------------
 -- Evaluation
 
+data Err
+    = EvaluationError EvaluationError
+    | CodeGenError CodeGenError
+    | Unknown String
+
+instance Error Err where
+    noMsg = Unknown "An unknown error occurred"
+    strMsg = Unknown
+
+data EvaluationError
+    = NotFunction String Arg
+
 data FunState = FunState
     { varCount :: Int -- ^ Variables declared
     , funCount :: Int -- ^ Functions declared
@@ -74,15 +89,17 @@ newtype Depth = Depth Int
     deriving newtype (P.Eq, P.Ord, Num, Enum)
 
 newtype Vim a = Vim
+    ( ErrorT Err
     ( WriterT [Statement] --  ^ Our vim statements up to now
     ( ReaderT Depth       --  ^ How many functions we are
     ( StateT  FunState    --  ^ Modifiable function-specific data
     ( Identity
-    ))) a )
+    )))) a )
     deriving newtype
         ( Applicative
         , Functor
         , Monad
+        , MonadError Err
         , MonadWriter [Statement]
         , MonadReader Depth
         , MonadState FunState
@@ -110,15 +127,16 @@ instance MonadVim Vim where
         . flip evalStateT (FunState 0 0)
         . flip runReaderT depth
         . runWriterT
+        . runErrorT
         $ vim
 
 
-class Monad m => MonadVim m where
+class MonadError Err m => MonadVim m where
     statement   :: Statement -> m ()
     makeVarName :: Scope -> m String
     makeFunName :: m String
     getDepth    :: m Depth
-    eval        :: Depth -> m a -> (a, [Statement])
+    eval        :: Depth -> m a -> (Either Err a, [Statement])
 
 --------------------------------------------------------------------------------
 -- Combinators
@@ -198,9 +216,9 @@ define1 f = do
     fname   <- makeFunName
     depth   <- getDepth
     let body = f (Var Argument argName)
-        (result, statements) = eval (succ depth) body
-
-    statement $ DefineFunc fname [argName] $ statements ++ [Return $ A result]
+        (eResult, statements) = eval (succ depth) body
+    res <- either throwError return eResult
+    statement $ DefineFunc fname [argName] $ statements ++ [Return $ A res]
     return $ \a -> App fname [A a]
 
 define2 :: MonadVim m
@@ -213,8 +231,9 @@ define2 f = do
     depth <- getDepth
     let body = f (Var Argument argName1)
                  (Var Argument argName2)
-        (result, statements) = eval (succ depth) body
-    statement $ DefineFunc fname [argName1, argName2] $ statements ++ [Return $ A result]
+        (eResult, statements) = eval (succ depth) body
+    res <- either throwError return eResult
+    statement $ DefineFunc fname [argName1, argName2] $ statements ++ [Return $ A res]
     return $ \a b -> App fname [A a, A b]
 
 define3 :: MonadVim m
@@ -229,10 +248,11 @@ define3 f = do
     let body = f (Var Argument argName1)
                  (Var Argument argName2)
                  (Var Argument argName3)
-        (result, statements) = eval (succ depth) body
+        (eResult, statements) = eval (succ depth) body
+    res <- either throwError return eResult
     statement
         $ DefineFunc fname [argName1, argName2, argName3]
-        $ statements ++ [Return $ A result]
+        $ statements ++ [Return $ A res]
     return $ \a b c -> App fname [A a, A b, A c]
 
 --------------------------------------------------------------------------------
@@ -246,10 +266,19 @@ echo = statement . Call "echo" . pure . A
 call :: MonadVim m => Expr a -> m ()
 call e = case e of
     App _ _ -> statement $ Call "call" [A e]
-    _ -> error "Executing a `call` statement on something that is not a function"
+    _       -> throwError $ EvaluationError $ NotFunction "call" $ A e
 
 --------------------------------------------------------------------------------
 -- Code Generation
+
+data CodeGenError
+    = NumArgs
+        String  -- ^ Function name
+        Natural -- ^ Expected args
+        Natural -- ^ Given args
+    | TypeMismatch
+        String  -- ^ Expected
+        Arg     -- ^ Given
 
 generateCode :: Vim () -> String
 generateCode
@@ -301,7 +330,8 @@ genE (A e) = case e of
     App fun args -> fun <> parenthesize (map genE args)
     where
         binInfix (App fun [a, b]) = unwords [genE a, fun, genE b]
-        binInfix _ = error "Incorrect number of parameters for a binary operator"
+        -- binInfix (App fun args  ) = throwError $ CodeGenError $ NumArgs fun 2 $ fromIntegral $ length args
+        -- binInfix e = throwError $ CodeGenError $ TypeMismatch "function application" $ A e
 
 
 indent :: String -> String
