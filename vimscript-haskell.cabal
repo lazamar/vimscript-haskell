@@ -19,6 +19,7 @@ library
   exposed-modules:
     Vim.Expression
   --other-modules:
+  ghc-options:         -Wall -Wno-partial-type-signatures
   build-depends:       base
                        , mtl
   hs-source-dirs:      src

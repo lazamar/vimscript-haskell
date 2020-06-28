@@ -3,21 +3,20 @@
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE LambdaCase #-}
 
 module Vim.Expression where
 
-import Control.Monad (replicateM)
 import Control.Monad.Writer.Lazy (WriterT, tell, MonadWriter, runWriterT)
-import Control.Monad.Reader (ReaderT, MonadReader, local, ask, runReaderT)
-import Control.Monad.Trans (MonadTrans)
-import Control.Monad.State.Lazy (MonadState, StateT, runStateT, withStateT, evalStateT, state)
-import Data.Traversable (for)
-import Data.Bifunctor (first)
+import Control.Monad.Reader (ReaderT, MonadReader, ask, runReaderT)
+import Control.Monad.State.Lazy (MonadState, StateT, evalStateT, state)
 import Data.Functor.Identity (Identity, runIdentity)
+import Data.List (intercalate)
 
 -- | A Vimscript expression
 data Expr a
-    = Const a
+    = LInt Int
+    | LStr String
     | Var Scope String
     | App (Func a) [Argument]
 
@@ -38,7 +37,6 @@ data Argument where
 
 data Statement
     = DefineFunc String [String] [Statement]
-    | DefineVar String Argument
     | Call String [Argument]
     | Return Argument
 
@@ -70,7 +68,7 @@ newtype Vim a = Vim
 
 instance MonadVim Vim where
     statement = tell . pure
-    makeVarName scope = do
+    makeVarName _ = do
         Depth d <- getDepth
         state $ \s ->
             let count = varCount s
@@ -81,7 +79,7 @@ instance MonadVim Vim where
         Depth d <- getDepth
         state $ \s ->
             let count = funCount s
-                vname = concat ["fun_", show d, "_", show count]
+                vname = concat ["Fun_", show d, "_", show count]
             in
             (vname , s { funCount = succ count })
     getDepth = ask
@@ -99,6 +97,14 @@ class Monad m => MonadVim m where
     makeFunName :: m String
     getDepth    :: m Depth
     eval        :: Depth -> m a -> (a, [Statement])
+
+-- Combinators
+
+str :: String -> Expr String
+str = LStr
+
+int :: Int -> Expr Int
+int = LInt
 
 define1 :: MonadVim m
     => (Expr a -> m (Expr b))
@@ -144,3 +150,59 @@ define3 f = do
         $ DefineFunc fname [argName1, argName2, argName3]
         $ statements ++ [Return $ Arg result]
     return $ \a b c -> App (Func fname) [Arg a, Arg b, Arg c]
+
+-- Stdlib
+
+-- | Print something
+echo :: MonadVim m => Expr String -> m ()
+echo = statement . Call "echo" . pure . Arg
+
+-- | Call a function only for its effects.
+call :: MonadVim m => Expr a -> m ()
+call e = case e of
+    App _ _ -> statement $ Call "call" [Arg e]
+    _ -> error "Executing a `call` statement on something that is not a function"
+
+-- Code Generation
+
+gen :: Depth -> Statement -> [String]
+gen d = \case
+    DefineFunc name args body ->
+        concat
+            [ ["function! " <> name <> "(" <> intercalate ", " args <> ")"]
+            , map indent . concatMap (gen (succ d)) $ body
+            , ["endfunction", "",""] -- Two lines after function definition
+            ]
+    Return arg->
+        pure $ "return " <> genE arg
+
+    Call fun args ->
+        pure $ unwords $ fun : map genE args
+
+genE :: Argument -> String
+genE (Arg e) = case e of
+    LInt v -> show v
+    LStr v -> "\"" <> v <> "\""
+    Var scope vname ->
+        let scopeLetter = case scope of
+                Argument   -> "a"
+                Window     -> "w"
+                Buffer     -> "b"
+                Tab        -> "t"
+                VimSpecial -> "v"
+        in
+        scopeLetter <> ":" <> vname
+    App (Func "+") [a, b] -> unwords [genE a, "+", genE b]
+    App (Func "-") [a, b] -> unwords [genE a, "+", genE b]
+    App (Func fun) args -> fun <> parenthesize (map genE args)
+
+indent :: String -> String
+indent = ("    " <>)
+
+parenthesize :: [String] -> String
+parenthesize vals = "(" <> intercalate "," vals <> ")"
+
+
+
+
+
