@@ -15,6 +15,8 @@ in
       cabal-install #  Make sure we are using cabal version 3
       ghcid
       pkgs.haskell.packages.ghc882.ghcide
+      pkgs.entr
+      pkgs.vim
     ];
 
     # Prevents cabal from choosing alternate plans, so that
