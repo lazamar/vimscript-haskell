@@ -4,7 +4,7 @@ module Vim.Run where
    A module to allow running Vimscript and getting the output.
 -}
 
-import Vim.Expression (Vim, statement, Arg(..), Statement(..), Expr, generateCode)
+import Vim.Expression (Vim, statement, Arg(..), Statement(..), Expr, generateCode, Code(..))
 import Control.Exception (bracket, try, IOException)
 import System.Directory (removeFile)
 import System.IO.Temp (emptySystemTempFile)
@@ -16,20 +16,20 @@ data ExecError
 
 -- | Run a Vimscript program and return the value of its output
 getResult :: Vim (Expr a) -> IO (Either ExecError String)
-getResult program =
-    let code = generateCode $ do
-            res <- program
-            -- Add a statement that prints the result in the last
-            -- line of the current buffer
-            statement $ Call "let a =" [A res]
-            statement $ Call "put =a" []
-    in
-    fmap (last . lines) <$> execute code
+getResult program = fmap (last . lines) <$> execute (getCode program)
+
+-- | Add a statement that prints the result in the current buffer
+getCode :: Vim (Expr a) -> Code
+getCode program = generateCode $ do
+    res <- program
+    statement $ Call "let a =" [A res]
+    statement $ Call "put =a" []
+
 
 -- | Execute a vim script and return what it
 -- printed in a buffer
-execute :: String -> IO (Either ExecError String)
-execute code =
+execute :: Code -> IO (Either ExecError String)
+execute (Code code) =
     withTempFile "input" $ \inputFile ->
         withTempFile "output" $ \outputFile -> do
             writeFile inputFile code

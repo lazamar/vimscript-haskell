@@ -15,11 +15,12 @@ module Vim.Expression where
 import qualified Prelude as P
 
 import Prelude hiding (Ord(..), Eq(..))
-import Control.Monad.Writer.Lazy (WriterT, tell, MonadWriter, runWriterT)
-import Control.Monad.Reader (ReaderT, MonadReader, ask, runReaderT)
-import Control.Monad.State.Lazy (MonadState, StateT, evalStateT, state)
+import Control.Monad.Writer.Lazy (WriterT, tell, MonadWriter, runWriterT, pass)
+import Control.Monad.Reader (ReaderT, MonadReader, ask, runReaderT, local)
+import Control.Monad.State.Lazy (MonadState, StateT, evalStateT, state, withState, get, put)
 import Control.Monad.Error (MonadError, Error(..), ErrorT, runErrorT, throwError)
 import Data.Functor.Identity (Identity, runIdentity)
+import Data.Traversable (for)
 import Data.List (intercalate)
 import Data.String (IsString(..))
 import Numeric.Natural (Natural)
@@ -130,6 +131,19 @@ instance MonadVim Vim where
         . runErrorT
         $ vim
 
+    eval' (depth, fstate) f
+        = localState (const fstate)
+        . local (const depth)
+        . pass
+        . fmap (\res -> (res, f res))
+        where
+            -- | Run action with modified state and restore initial state at the end.
+            localState f action = do
+                s <- get
+                put $ f s
+                res <- action
+                put s
+                return res
 
 class MonadError Err m => MonadVim m where
     statement   :: Statement -> m ()
@@ -137,6 +151,9 @@ class MonadError Err m => MonadVim m where
     makeFunName :: m String
     getDepth    :: m Depth
     eval        :: Depth -> m a -> (Either Err a, [Statement])
+
+    -- | Transform the definition of a Vimscript program
+    eval'       :: (Depth, FunState) -> (a -> [Statement] -> [Statement]) -> m a -> m a
 
 --------------------------------------------------------------------------------
 -- Combinators
@@ -208,34 +225,34 @@ str = LStr
 int :: Int -> Expr Int
 int = LInt
 
-define1 :: MonadVim m
-    => (Expr a -> m (Expr b))
-    -> m (Expr a -> Expr b)
-define1 f = do
-    argName <- makeVarName Argument
-    fname   <- makeFunName
-    depth   <- getDepth
-    let body = f (Var Argument argName)
-        (eResult, statements) = eval (succ depth) body
-    res <- either throwError return eResult
-    statement $ DefineFunc fname [argName] $ statements ++ [Return $ A res]
-    return $ \a -> App fname [A a]
-
-define2 :: MonadVim m
-    => (Expr a -> Expr b -> m (Expr c))
-    -> m (Expr a -> Expr b -> Expr c)
-define2 f = do
-    argName1 <- makeVarName Argument
-    argName2 <- makeVarName Argument
-    fname <- makeFunName
-    depth <- getDepth
-    let body = f (Var Argument argName1)
-                 (Var Argument argName2)
-        (eResult, statements) = eval (succ depth) body
-    res <- either throwError return eResult
-    statement $ DefineFunc fname [argName1, argName2] $ statements ++ [Return $ A res]
-    return $ \a b -> App fname [A a, A b]
-
+-- define1 :: MonadVim m
+--     => (Expr a -> m (Expr b))
+--     -> m (Expr a -> Expr b)
+-- define1 f = do
+--     argName <- makeVarName Argument
+--     fname   <- makeFunName
+--     depth   <- getDepth
+--     let body = f (Var Argument argName)
+--         (eResult, statements) = eval (succ depth) body
+--     res <- either throwError return eResult
+--     statement $ DefineFunc fname [argName] $ statements ++ [Return $ A res]
+--     return $ \a -> App fname [A a]
+--
+-- define2 :: MonadVim m
+--     => (Expr a -> Expr b -> m (Expr c))
+--     -> m (Expr a -> Expr b -> Expr c)
+-- define2 f = do
+--     argName1 <- makeVarName Argument
+--     argName2 <- makeVarName Argument
+--     fname <- makeFunName
+--     depth <- getDepth
+--     let body = f (Var Argument argName1)
+--                  (Var Argument argName2)
+--         (eResult, statements) = eval (succ depth) body
+--     res <- either throwError return eResult
+--     statement $ DefineFunc fname [argName1, argName2] $ statements ++ [Return $ A res]
+--     return $ \a b -> App fname [A a, A b]
+--
 define3 :: MonadVim m
     => (Expr a -> Expr b -> Expr c -> m (Expr d))
     -> m (Expr a -> Expr b -> Expr c -> Expr d)
@@ -248,11 +265,13 @@ define3 f = do
     let body = f (Var Argument argName1)
                  (Var Argument argName2)
                  (Var Argument argName3)
-        (eResult, statements) = eval (succ depth) body
-    res <- either throwError return eResult
-    statement
-        $ DefineFunc fname [argName1, argName2, argName3]
-        $ statements ++ [Return $ A res]
+
+        handleBody res statements =
+            pure
+                $ DefineFunc fname [argName1, argName2, argName3]
+                $ statements ++ [Return $ A res]
+
+    eval' (succ depth, FunState 0 0) handleBody body
     return $ \a b c -> App fname [A a, A b, A c]
 
 --------------------------------------------------------------------------------
@@ -280,9 +299,12 @@ data CodeGenError
         String  -- ^ Expected
         Arg     -- ^ Given
 
-generateCode :: Vim () -> String
+newtype Code = Code { unCode :: String }
+
+generateCode :: Vim () -> Code
 generateCode
-  = unlines
+  = Code
+  . unlines
   . concatMap (gen 0)
   . snd
   . eval (Depth 0)
