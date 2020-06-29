@@ -8,11 +8,17 @@ let
     # Commands
     commands = {
       test-watch = pkgs.writeShellScriptBin "test-watch" ''
-        ls src/*.hs test/*.hs | entr -dsc 'cabal build && cabal run vimscript-test'
+        find src test -name '*.hs' | entr -dsc 'cabal build && cabal run vimscript-test'
+        sleep 1
         '';
 
       run-watch = pkgs.writeShellScriptBin "run-watch" ''
-        ls src/*.hs | entr -dsc 'cabal build && cabal run vimscript-haskell-exe'
+        find src -name '*.hs' | entr -dsc 'cabal build && cabal run vimscript-haskell-exe'
+        sleep 1
+        '';
+
+      run = pkgs.writeShellScriptBin "run" ''
+        cabal build && cabal run vimscript-haskell-exe
         '';
     };
 in
@@ -30,6 +36,7 @@ in
       pkgs.vim
       commands.test-watch
       commands.run-watch
+      commands.run
     ];
 
     # Prevents cabal from choosing alternate plans, so that
