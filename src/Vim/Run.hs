@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Vim.Run where
 
 {-
@@ -12,7 +13,8 @@ import Data.Bifunctor (first)
 import System.Directory (removeFile)
 import System.IO.Temp (emptySystemTempFile)
 import System.Process (callCommand)
-import Vim.Expression (Vim, statement, Arg(..), Statement(..), Expr, generateCode, Code(..), Err(..))
+import Vim.Expression (Vim, statement, Arg(..), Statement(..), Expr, generateCode
+                      , str, Code(..), Err(..))
 
 data ExecError
     = FailedRunningVim IOException
@@ -24,12 +26,14 @@ getResult :: (MonadError ExecError m, MonadIO m) => Vim (Expr a) -> m String
 getResult program = do
     code <- either throwError return $ getCode program
     res <- execute code
-    return $ last $ lines res
+    -- Remove initial and final new lines
+    return . tail . reverse . tail . reverse $ res
 
--- | Add a statement that prints the result in the current buffer
+-- | Add a statement that prints only the outcome expression in a new buffer
 getCode :: Vim (Expr a) -> Either ExecError Code
 getCode program = first FailedCompiling $ generateCode $ do
         res <- program
+        statement $ Call "execute \"normal ggdG\"" []
         statement $ Call "let a =" [A res]
         statement $ Call "put =a" []
 
