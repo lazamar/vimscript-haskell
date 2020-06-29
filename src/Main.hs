@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Main where
 
-import Prelude hiding (Ord(..))
+import Prelude hiding (Ord(..), True, False)
 import Vim.Expression
 import Control.Monad.Except
 
@@ -23,9 +23,11 @@ main = do
                 define3 $ \number name1 name2 -> do
                     return 2
                     return 5
-                    return ("Hi" :: Expr String)
+                    return $ str "Hi"
 
-                return $ cond (other >= 2) name1 $ cond (number < 0) name2 (str "Other")
+                return $ cond (other < 2) name1
+                       $ cond (number < 0) name2
+                       $ cond True "Other" $ str "No choice"
 
             return $ sayHi 1 "Marcelo" "John"
 

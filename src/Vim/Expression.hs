@@ -14,7 +14,7 @@ module Vim.Expression where
 
 import qualified Prelude as P
 
-import Prelude hiding (Ord(..), Eq(..))
+import Prelude hiding (Ord(..), Eq(..), True, False)
 import Control.Monad.Writer.Lazy (WriterT, tell, MonadWriter, runWriterT, pass)
 import Control.Monad.Reader (ReaderT, MonadReader, ask, runReaderT, local)
 import Control.Monad.State.Lazy (MonadState, StateT, evalStateT, state, get, put)
@@ -28,7 +28,8 @@ import Numeric.Natural (Natural)
 data Expr a where
     LInt    :: Int              -> Expr Int
     LStr    :: String           -> Expr String
-    LBool   :: Bool             -> Expr Bool
+    True    ::                     Expr Bool
+    False   ::                     Expr Bool
     LList   :: [Expr a]         -> Expr [Expr a]
     Var     :: Scope -> String  -> Expr a
     App     :: String -> [Arg]  -> Expr a
@@ -37,7 +38,8 @@ instance Show (Expr a) where
     show = \case
         LInt v -> "LInt " <> show v
         LStr v -> "LStr " <> show v
-        LBool v -> "LBool " <> show v
+        True   -> "True"
+        False  -> "False"
         LList exprs -> "LList (" <> show exprs <> ")"
         Var scope name -> unwords ["Var", show scope , show name]
         App fun args -> unwords ["App", show fun, show args]
@@ -160,8 +162,8 @@ class Boolean a where
     not   :: a -> a
 
 instance Boolean (Expr Bool) where
-    false = LBool False
-    true  = LBool True
+    false = False
+    true  = True
     (&&)  = binOp "&&"
     (||)  = binOp "||"
     not   = unaryOp "not"
@@ -325,7 +327,8 @@ genE :: MonadError Err m => Arg -> m String
 genE (A e) = case e of
     LInt v      -> return $ show v
     LStr v      -> return $ "\"" <> v <> "\""
-    LBool v     -> return $ if v then "1" else "0"
+    True        -> return "1"
+    False       -> return "0"
     LList exs   -> do
         xs <- traverse (genE . A) exs
         return $ "[ " <> intercalate "," xs <> " ]"
@@ -343,7 +346,7 @@ genE (A e) = case e of
     App "*"  [_,_] -> binInfix e
     App "&&" [_,_] -> binInfix e
     App "||" [_,_] -> binInfix e
-    App "not" [a]  -> genE $ A $ App "ternary" [a, A $ LBool False, A $ LBool True]
+    App "not" [a]  -> genE $ A $ App "ternary" [a, A False, A True]
     App "<"  [_,_] -> binInfix e
     App "<=" [_,_] -> binInfix e
     App ">"  [_,_] -> binInfix e
