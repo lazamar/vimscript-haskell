@@ -9,6 +9,8 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE ConstraintKinds #-}
 
 module Vim.Expression where
 
@@ -215,54 +217,80 @@ str = LStr
 int :: Int -> Expr Int
 int = LInt
 
--- define1 :: MonadVim m
---     => (Expr a -> m (Expr b))
---     -> m (Expr a -> Expr b)
--- define1 f = do
---     argName <- makeVarName Argument
---     fname   <- makeFunName
---     depth   <- getDepth
---     let body = f (Var Argument argName)
---         (eResult, statements) = eval (succ depth) body
---     res <- either throwError return eResult
---     statement $ DefineFunc fname [argName] $ statements ++ [Return $ A res]
---     return $ \a -> App fname [A a]
+-------------------------------------------------------------------------------
+-- Function definition
+
+-- | Make type inference work
+type Fun function params return =
+    ( function ~ Function params return
+    , params   ~ Params function
+    , return   ~ Return function
+    )
+
+type family Function params return where
+    Function ()        return = return
+    Function (x -> xs) return = x -> Function xs return
+
+-- | Capture only the function parameters, replacing the return type for unit.
+type family Params f where
+    Params (a -> b) = a -> Params b
+    Params _        = ()
+
+type family Return f where
+    Return (a -> b) = Return b
+    Return a        = a
+
+-- | A function that returns actions in the Vim monad
+class MonadVim m => VimFunction m f where
+    saturate :: [String] -> f -> m ([String], Return f)
+
+instance (MonadVim m, VimFunction m g) => VimFunction m (Expr a -> g) where
+    saturate args f = do
+        vname <- makeVarName Argument
+        let g = f $ Var Argument vname
+        saturate (vname:args) g
+
+instance MonadVim m => VimFunction m (Vim a) where
+    saturate args val = return (reverse args, val)
+
+-- | A Function that can be called using the Expr type.
+-- Creates a Haskell function that once saturated will produce
+-- an invokation of the equivalent Vim function.
+class VimFunctionExpression a where
+    produce :: String -> [Arg] -> a
+
+instance VimFunctionExpression p => VimFunctionExpression (Expr a -> p) where
+    produce fname args = \a -> produce fname (A a : args)
+
+instance VimFunctionExpression (Expr a) where
+    produce fname args = App fname $ reverse args
+
+-- | Define a vim function
+-- Accepts functions of any arity > 1
 --
--- define2 :: MonadVim m
---     => (Expr a -> Expr b -> m (Expr c))
---     -> m (Expr a -> Expr b -> Expr c)
--- define2 f = do
---     argName1 <- makeVarName Argument
---     argName2 <- makeVarName Argument
---     fname <- makeFunName
---     depth <- getDepth
---     let body = f (Var Argument argName1)
---                  (Var Argument argName2)
---         (eResult, statements) = eval (succ depth) body
---     res <- either throwError return eResult
---     statement $ DefineFunc fname [argName1, argName2] $ statements ++ [Return $ A res]
---     return $ \a b -> App fname [A a, A b]
+--          add <- define $ \a b -> a + b
+--          echo $ add 1 2
 --
-define3 :: MonadVim m
-    => (Expr a -> Expr b -> Expr c -> m (Expr d))
-    -> m (Expr a -> Expr b -> Expr c -> Expr d)
-define3 f = do
-    argName1 <- makeVarName Argument
-    argName2 <- makeVarName Argument
-    argName3 <- makeVarName Argument
+define ::
+    ( VimFunction m f           -- f is a sequence of statements
+    , Fun f xs (m (Expr a))     -- f returns an (m (Expr a))
+    , Fun g ys (Expr a)         -- g returns an expression of same time as in f
+    , Params f ~ Params g       -- f and g require the same parameters
+    , VimFunctionExpression g   -- We can express g as an expression
+    ) => f -> m g
+define f = do
+    -- Create all the arguments to the function as variables and apply them.
+    -- We get back the body of code that was generated and the name of the
+    -- variables that were used as arguments.
+    (args, body) <- saturate [] f
     fname <- makeFunName
     depth <- getDepth
-    let body = f (Var Argument argName1)
-                 (Var Argument argName2)
-                 (Var Argument argName3)
-
-        handleBody res statements =
+    let handleBody res statements =
             pure
-                $ DefineFunc fname [argName1, argName2, argName3]
+                $ DefineFunc fname args
                 $ statements ++ [Return $ A res] -- Add return statement
-
-    _ <- eval' (succ depth, FunState 0 0) handleBody body
-    return $ \a b c -> App fname [A a, A b, A c]
+    eval' (succ depth, FunState 0 0) handleBody body
+    return $ produce fname []
 
 --------------------------------------------------------------------------------
 -- Stdlib
