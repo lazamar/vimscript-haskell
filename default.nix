@@ -2,8 +2,6 @@
 { sources ? import ./nix/sources.nix,
   compiler ? "ghc882"
 }:
-with { overlay = _: pkgs: { niv = import sources.niv {}; }; };
-
 let
     #gitignoreSource = (import sources.gitignore { lib = pkgs.lib; }).gitignoreSource;
 
