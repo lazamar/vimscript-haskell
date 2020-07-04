@@ -1,5 +1,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE LambdaCase #-}
 module Vim.Run where
 
 {-
@@ -15,9 +16,23 @@ import System.Process (readCreateProcessWithExitCode, shell)
 import Vim.Expression (Vim, statement, Arg(..), Statement(..), Expr, generateCode, Code(..), Err(..))
 
 data ExecError
-    = VimExecutionFailure Int String String
+    = VimExecutionFailure String
     | FailedCompiling  Err
     deriving (Show)
+
+showExecError :: ExecError -> String
+showExecError = \case
+    VimExecutionFailure err -> unlines
+        [ "VimExecutionFailure:"
+        , indent err
+        ]
+
+    FailedCompiling err -> unlines
+        [ "FailedCompiling:"
+        , indent $ show err
+        ]
+    where
+        indent = unlines . fmap (">>  " ++) . lines
 
 -- | Run a Vimscript program and return the value of its output
 getResult :: (MonadError ExecError m, MonadIO m) => Vim (Expr a) -> m String
@@ -38,8 +53,8 @@ getCode program = first FailedCompiling $ generateCode $ do
 
 execute :: (MonadIO m, MonadError ExecError m) => Code -> m String
 execute (Code code) = do
-    (ex, stdout, stderr) <- liftIO $ readCreateProcessWithExitCode (shell "vim --clean -es") code
+    (ex, stdout, stderr) <- liftIO $ readCreateProcessWithExitCode (shell "vim --clean -esV") code
     case ex of
         ExitSuccess -> return stdout
-        ExitFailure n -> throwError $ VimExecutionFailure n stdout stderr
+        ExitFailure n -> throwError $ VimExecutionFailure stderr
 
