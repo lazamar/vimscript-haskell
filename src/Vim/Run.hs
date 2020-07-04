@@ -6,18 +6,16 @@ module Vim.Run where
    A module to allow running Vimscript and getting the output.
 -}
 
-import Control.Exception (bracket, try, IOException)
 import Control.Monad.Except (MonadError, throwError)
 import Control.Monad.IO.Class (liftIO, MonadIO)
 import Data.Bifunctor (first)
-import System.Directory (removeFile)
-import System.IO.Temp (emptySystemTempFile)
-import System.Process (callCommand)
-import Vim.Expression (Vim, statement, Arg(..), Statement(..), Expr, generateCode
-                      , str, Code(..), Err(..))
+import Data.List (intercalate)
+import System.Exit (ExitCode(..))
+import System.Process (readCreateProcessWithExitCode, shell)
+import Vim.Expression (Vim, statement, Arg(..), Statement(..), Expr, generateCode, Code(..), Err(..))
 
 data ExecError
-    = FailedRunningVim IOException
+    = VimExecutionFailure Int String String
     | FailedCompiling  Err
     deriving (Show)
 
@@ -27,34 +25,21 @@ getResult program = do
     code <- either throwError return $ getCode program
     res <- execute code
     -- Remove initial and final new lines
-    return . tail . reverse . tail . reverse $ res
+    return . intercalate "\n". tail . lines $ res
 
 -- | Add a statement that prints only the outcome expression in a new buffer
 getCode :: Vim (Expr a) -> Either ExecError Code
 getCode program = first FailedCompiling $ generateCode $ do
         res <- program
-        statement $ Call "execute \"normal ggdG\"" []
-        statement $ Call "let a =" [A res]
-        statement $ Call "put =a" []
+        statement $ Call "execute \"normal ggdG\"" [] -- Clear buffer
+        statement $ Call "let a =" [A res]            -- Assign return value to variable
+        statement $ Call "put =a" []                  -- Write  return value to buffer
+        statement $ Call "%%print" []                 -- Send buffer content to stdout
 
--- | Execute a vim script and return what it
--- printed in a buffer
 execute :: (MonadIO m, MonadError ExecError m) => Code -> m String
 execute (Code code) = do
-    res <- liftIO $ withTempFile "input" $ \inputFile ->
-        withTempFile "output" $ \outputFile -> do
-            writeFile inputFile code
-            res <- try $ callCommand $ unwords
-                    [ "vim"
-                    , "--clean"                           -- Start without any plugins
-                    , "-S", inputFile                     -- Read our script
-                    , "-c", "':wq! " <> outputFile <> "'" -- Save to file after executed
-                    ]
-            case res of
-                Left err -> return $ Left $ FailedRunningVim err
-                Right _ -> Right <$> readFile outputFile
-    either throwError return res
+    (ex, stdout, stderr) <- liftIO $ readCreateProcessWithExitCode (shell "vim --clean -es") code
+    case ex of
+        ExitSuccess -> return stdout
+        ExitFailure n -> throwError $ VimExecutionFailure n stdout stderr
 
--- | Create a temp file and delete after its use
-withTempFile :: String -> (String -> IO a) -> IO a
-withTempFile name = bracket (emptySystemTempFile name) removeFile

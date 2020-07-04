@@ -289,7 +289,7 @@ define f = do
             pure
                 $ DefineFunc fname args
                 $ statements ++ [Return $ A res] -- Add return statement
-    eval' (succ depth, FunState 0 0) handleBody body
+    _ <- eval' (succ depth, FunState 0 0) handleBody body
     return $ produce fname []
 
 --------------------------------------------------------------------------------
