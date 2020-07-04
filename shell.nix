@@ -21,6 +21,10 @@ let
       run = pkgs.writeShellScriptBin "run" ''
         cabal build && cabal run vimscript-haskell-exe
         '';
+
+      mktags = pkgs.writeShellScriptBin "mktags" ''
+        find src test -name *.hs | fast-tags -
+        '';
     };
 in
 pkgs.stdenv.mkDerivation {
@@ -37,5 +41,6 @@ pkgs.stdenv.mkDerivation {
         commands.test-watch
         commands.run-watch
         commands.run
+        commands.mktags
       ];
 }
