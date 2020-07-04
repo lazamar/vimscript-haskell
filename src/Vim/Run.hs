@@ -53,6 +53,7 @@ getCode program = first FailedCompiling $ generateCode $ do
 
 execute :: (MonadIO m, MonadError ExecError m) => Code -> m String
 execute (Code code) = do
+    -- Evaluate vimscript without a VIMRC file and with verbose logging
     (ex, stdout, stderr) <- liftIO $ readCreateProcessWithExitCode (shell "vim --clean -esV") code
     case ex of
         ExitSuccess -> return stdout

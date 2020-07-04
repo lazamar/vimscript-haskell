@@ -12,7 +12,7 @@ import Test.Hspec (Spec, describe, it, parallel)
 import Prelude hiding (Eq, True, False)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Except (runExceptT)
-import Test.QuickCheck (property, Arbitrary(..), suchThat)
+import Test.QuickCheck (property, Arbitrary(..), suchThat, withMaxSuccess)
 import Data.Maybe (fromMaybe)
 import Data.String (fromString)
 import Data.Bifunctor (first)
@@ -27,6 +27,7 @@ spec = parallel $ do
     describe "Primary types" $ do
         describe "Number" $ do
             it "can be generated from any Haskell number"
+                $ withMaxSuccess 20
                 $ property $ \number -> shouldEqual number $ return (fromIntegral number :: Expr Int)
 
         describe "String" $ do
@@ -35,7 +36,10 @@ spec = parallel $ do
                       shouldEqual string $ return (fromString string :: Expr String)
 
         it "string" $ shouldEqual "hi" $ return ("hi" :: Expr String)
-        it "string with escaped characters" $ shouldEqual "hi" $ return ("\"\''hi" :: Expr String)
+        it "string with escaped characters" $
+            let testString =  "\\\"\"\''hi"
+            in
+            shouldEqual testString $ return $ str testString
         it "boolean False" $ shouldEqual P.False $ return false
         it "boolean True" $ shouldEqual P.True $ return true
 
@@ -44,7 +48,7 @@ shouldEqual :: forall a. (Show a, P.Eq a, VimRead a, HasCallStack)
 shouldEqual val program = do
     eitherRes <- withTimeout (100 * millisecond) $ runResult $ Vim.getResult program
     let res = vimRead $ either error id eitherRes
-    Right val `Hspec.shouldBe` res
+    res `Hspec.shouldBe` Right val
     where
         runResult = fmap (first Vim.showExecError) . runExceptT
         withTimeout t

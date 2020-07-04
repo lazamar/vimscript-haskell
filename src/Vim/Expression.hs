@@ -354,7 +354,7 @@ gen d = \case
 genE :: MonadError Err m => Arg -> m String
 genE (A e) = case e of
     LInt v      -> return $ show v
-    LStr v      -> return $ "\"" <> v <> "\""
+    LStr v      -> return $ show v
     True        -> return "1"
     False       -> return "0"
     LList exs   -> do
