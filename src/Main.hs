@@ -20,14 +20,16 @@ main = do
                 let some = number * 5 :: Expr Int
                     other = some + number
 
-                g <- define $ \number name1 name2 -> do
-                    return $ cond (number == (1 :: Expr Int)) name1 name2
+                f2 <- define $ \number name1 name2 ->
+                    return
+                        $ cond (number == 2) name1
+                        $ cond (number > 3) name2
+                        $ (str "Oi")
 
                 return $ cond (other < 2) name1
                        $ cond (number < 0) name2
-                       $ cond True (str "Other")
-                       $ g 2 "hi" "hey"
+                       $ cond False "Other" $ f2 number name1 $ str "No choice"
 
-            return $ sayHi 1 "Marcelo" "John"
+            return $ sayHi 3 "Marcelo" "John"
 
 
