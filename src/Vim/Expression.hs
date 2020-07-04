@@ -93,9 +93,9 @@ newtype Depth = Depth Int
 
 newtype Vim a = Vim
     ( ExceptT Err
-    ( WriterT [Statement] --  ^ Our vim statements up to now
-    ( ReaderT Depth       --  ^ How many functions we are
-    ( StateT  FunState    --  ^ Modifiable function-specific data
+    ( WriterT [Statement] -- Our vim statements up to now
+    ( ReaderT Depth       -- How many functions we are
+    ( StateT  FunState    -- Modifiable function-specific data
     ( Identity
     )))) a )
     deriving newtype
@@ -340,7 +340,7 @@ gen d = \case
         return $ concat
             [ ["function! " <> name <> "(" <> intercalate ", " args <> ")"]
             , map indent $ concat statements
-            , ["endfunction", "",""] -- Two lines after function definition
+            , ["endfunction"] -- Two lines after function definition
             ]
 
     Return arg-> do
@@ -379,6 +379,7 @@ genE (A e) = case e of
     App "<=" [_,_] -> binInfix e
     App ">"  [_,_] -> binInfix e
     App ">=" [_,_] -> binInfix e
+    App "==#" [_,_] -> binInfix e
     App "ternary" [c, a, b] -> do
         c' <- genE c
         a' <- genE a
