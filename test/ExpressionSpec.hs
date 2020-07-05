@@ -6,21 +6,28 @@ module ExpressionSpec (spec) where
 
 
 import Vim.Expression
+    ( Expr
+    , Vim
+    , MonadVim(..)
+    , false
+    , str
+    , true
+    )
 import Text.Read (readMaybe)
 import Test.Hspec.Expectations (HasCallStack)
 import Test.Hspec (Spec, describe, it, parallel)
-import Prelude hiding (Eq, True, False)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Except (runExceptT)
-import Test.QuickCheck (property, Arbitrary(..), suchThat, withMaxSuccess)
+import Test.QuickCheck (property, Arbitrary(..), suchThat, withMaxSuccess, choose, listOf)
+import Data.Char (ord, chr)
 import Data.Maybe (fromMaybe)
 import Data.String (fromString)
 import Data.Bifunctor (first)
 import System.Timeout (timeout)
 
-import qualified Prelude as P
 import qualified Test.Hspec as Hspec
 import qualified Vim.Run as Vim
+import qualified Vim.Expression as E
 
 spec :: Spec
 spec = parallel $ do
@@ -40,10 +47,10 @@ spec = parallel $ do
             let testString =  "\\\"\"\''hi"
             in
             shouldEqual testString $ return $ str testString
-        it "boolean False" $ shouldEqual P.False $ return false
-        it "boolean True" $ shouldEqual P.True $ return true
+        it "boolean False" $ shouldEqual False $ return false
+        it "boolean True" $ shouldEqual True $ return true
 
-shouldEqual :: forall a. (Show a, P.Eq a, VimRead a, HasCallStack)
+shouldEqual :: forall a. (Show a, Eq a, VimRead a, HasCallStack)
     => a -> Vim (Expr a) -> IO ()
 shouldEqual val program = do
     eitherRes <- withTimeout (100 * millisecond) $ runResult $ Vim.getResult program
@@ -60,7 +67,12 @@ newtype NonEmptyString = NonEmptyString String
     deriving (Show)
 
 instance Arbitrary NonEmptyString where
-    arbitrary = fmap NonEmptyString $ arbitrary `suchThat` (P./= "")
+    arbitrary = fmap NonEmptyString validString
+        where
+            -- Only printable characters
+            validChar = chr <$> choose (32, 126)
+            validString = listOf validChar `suchThat` (not . null)
+
 
 class VimRead a where
     vimRead :: String -> Either String a
@@ -73,6 +85,6 @@ instance VimRead String where
 
 instance VimRead Bool where
     vimRead str = case vimRead str :: Either String Int of
-        Right 0 -> Right P.False
-        Right 1 -> Right P.True
+        Right 0 -> Right False
+        Right 1 -> Right True
         _       -> Left str
