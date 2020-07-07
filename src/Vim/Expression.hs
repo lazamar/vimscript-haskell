@@ -28,13 +28,15 @@ import Numeric.Natural (Natural)
 
 -- | A Vimscript expression
 data Expr a where
-    LInt    :: Int              -> Expr Int
-    LStr    :: String           -> Expr String
-    True    ::                     Expr Bool
-    False   ::                     Expr Bool
-    LList   :: [Expr a]         -> Expr [Expr a]
-    Var     :: Scope -> String  -> Expr a
-    App     :: String -> [Arg]  -> Expr a
+    LInt    :: Int                      -> Expr Int
+    LStr    :: String                   -> Expr String
+    True    ::                             Expr Bool
+    False   ::                             Expr Bool
+    LList   :: [Expr a]                 -> Expr [Expr a]
+    Var     :: Scope -> String          -> Expr a
+    App     :: String -> [Arg]          -> Expr a
+    Lam     :: (Expr a -> Expr b)       -> Expr (a -> b)
+    App'    :: Expr (a -> b) -> Expr a  -> Expr b
 
 instance Show (Expr a) where
     show = \case
@@ -45,6 +47,8 @@ instance Show (Expr a) where
         LList exprs -> "LList (" <> show exprs <> ")"
         Var scope name -> unwords ["Var", show scope , show name]
         App fun args -> unwords ["App", show fun, show args]
+        Lam _ -> "Lam <function>"
+        App' fun val ->  "App' (" <> show fun <> ") (" <> show val <> ")"
 
 -- | Scope of a variable
 data Scope
@@ -53,11 +57,12 @@ data Scope
     | Buffer
     | Tab
     | VimSpecial
+    | Lambda
     deriving  (Show)
 
 -- | A function argument of any type
 data Arg where
-    A :: forall a. Expr a -> Arg
+    A :: Expr a -> Arg
 
 instance Show Arg where
     show (A expr) = "A (" <> show expr <> ")"
@@ -220,6 +225,12 @@ int = LInt
 -------------------------------------------------------------------------------
 -- Function definition
 
+lam :: (Expr a -> Expr b) -> Expr (a -> b)
+lam = Lam
+
+app :: Expr (a -> b) -> Expr a -> Expr b
+app = App'
+
 -- | Make type inference work
 type Fun function params return =
     ( function ~ Function params return
@@ -344,54 +355,65 @@ gen d = \case
             ]
 
     Return arg-> do
-        res <- genE arg
+        res <- genE d arg
         return [ "return " ++ res ]
 
     Call fun args -> do
-        args' <- traverse genE args
+        args' <- traverse (genE d) args
         return $ [ unwords $ fun:args' ]
 
-genE :: MonadError Err m => Arg -> m String
-genE (A e) = case e of
+genE :: MonadError Err m => Depth -> Arg -> m String
+genE d (A e) = case e of
     LInt v      -> return $ show v
     LStr v      -> return $ show v
     True        -> return "1"
     False       -> return "0"
     LList exs   -> do
-        xs <- traverse (genE . A) exs
+        xs <- traverse (genE d . A) exs
         return $ "[ " <> intercalate "," xs <> " ]"
     Var scope vname ->
         let scopeLetter = case scope of
-                Argument   -> "a"
-                Window     -> "w"
-                Buffer     -> "b"
-                Tab        -> "t"
-                VimSpecial -> "v"
+                Argument   -> Just "a"
+                Window     -> Just "w"
+                Buffer     -> Just "b"
+                Tab        -> Just "t"
+                VimSpecial -> Just "v"
+                Lambda     -> Nothing
         in
-        return $ scopeLetter <> ":" <> vname
+        return $ maybe  vname (<> (":" <> vname)) $ scopeLetter
     App "+"  [_,_] -> binInfix e
     App "-"  [_,_] -> binInfix e
     App "*"  [_,_] -> binInfix e
     App "&&" [_,_] -> binInfix e
     App "||" [_,_] -> binInfix e
-    App "not" [a]  -> genE $ A $ App "ternary" [a, A False, A True]
+    App "not" [a]  -> genE d $ A $ App "ternary" [a, A False, A True]
     App "<"  [_,_] -> binInfix e
     App "<=" [_,_] -> binInfix e
     App ">"  [_,_] -> binInfix e
     App ">=" [_,_] -> binInfix e
     App "==#" [_,_] -> binInfix e
     App "ternary" [c, a, b] -> do
-        c' <- genE c
-        a' <- genE a
-        b' <- genE b
+        c' <- genE d c
+        a' <- genE d a
+        b' <- genE d b
         return $ parens $ unwords [c', "?", a', ":", b']
     App fun args -> do
-        args' <- traverse genE args
+        args' <- traverse (genE d) args
         return $ fun <> parenthesize args'
+    Lam fun -> do
+        let Depth depth = d
+            vname = "lambdavar" <> show depth
+        body <- genE (Depth $ depth + 1) $ A $ fun $ Var Lambda vname
+        return $ unwords ["{", vname, "->", body, "}"]
+
+    App' exfun exval -> do
+        fun <- genE d $ A $ exfun
+        var <- genE d $ A $ exval
+        return $ parenthesize [fun] <> parenthesize [var]
     where
         binInfix (App fun [a, b]) = do
-            a' <- genE a
-            b' <- genE b
+            a' <- genE d a
+            b' <- genE d b
             return $ unwords [a', fun, b']
         binInfix (App fun args  ) = throwError $ CodeGenError $ NumArgs fun 2 $ fromIntegral $ length args
         binInfix ex = throwError $ CodeGenError $ TypeMismatch "function application" $ A ex

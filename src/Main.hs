@@ -20,16 +20,17 @@ main = do
                 let some = number * 5 :: Expr Int
                     other = some + number
 
-                f2 <- define $ \number name1 name2 ->
-                    return
-                        $ cond (number == 2) name1
-                        $ cond (number > 3) name2
-                        $ (str "Oi")
+                    f2 = lam $ \number ->
+                         lam $ \name1  ->
+                         lam $ \name2  ->
+                            cond (number == 2) name1
+                            $ cond (number > 3) name2
+                            $ (str "Oi")
 
                 return $ cond (other < 2) name1
                        $ cond (number < 0) name2
-                       $ cond False "Other" $ f2 number name1 $ str "No choice"
+                       $ cond False "Other" $ f2 `app` number `app` name1 `app` str "No choice"
 
-            return $ sayHi 3 "Marcelo" "John"
+            return $ sayHi 4 "Marcelo" "John"
 
 

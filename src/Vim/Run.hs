@@ -57,5 +57,5 @@ execute (Code code) = do
     (ex, stdout, stderr) <- liftIO $ readCreateProcessWithExitCode (shell "vim --clean -esV") code
     case ex of
         ExitSuccess -> return stdout
-        ExitFailure n -> throwError $ VimExecutionFailure stderr
+        ExitFailure _ -> throwError $ VimExecutionFailure stderr
 
