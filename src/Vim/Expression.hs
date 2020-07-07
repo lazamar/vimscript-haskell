@@ -225,12 +225,6 @@ int = LInt
 -------------------------------------------------------------------------------
 -- Function definition
 
-lam :: (Expr a -> Expr b) -> Expr (a -> b)
-lam = Lam
-
-app :: Expr (a -> b) -> Expr a -> Expr b
-app = App'
-
 -- | Make type inference work
 type Fun function params return =
     ( function ~ Function params return
@@ -302,6 +296,38 @@ define f = do
                 $ statements ++ [Return $ A res] -- Add return statement
     _ <- eval' (succ depth, FunState 0 0) handleBody body
     return $ produce fname []
+
+-- Lambda functions
+
+-- | Define a lambda function that can take multiple parameters
+--
+--      let fun = lambda $ \salute name -> echo $ salute <> ", " <> name "!!"
+--      in fun "Hello" "Jack"
+--
+lambda :: LambdaFun f => f -> f
+lambda = transapp . trans
+
+-- | Transform (Expr a -> Expr b) into Expr(a -> b)
+type family FactorExpr a where
+    FactorExpr (Expr a)      = Expr a
+    FactorExpr (Expr a -> b) = Expr (a -> StripExpr b)
+
+-- | Transform (Expr a -> Exor b) into (a -> b)
+type family StripExpr a where
+    StripExpr (Expr a)      = a
+    StripExpr (Expr a -> b) = a -> StripExpr b
+
+class LambdaFun a where
+    trans    :: a -> FactorExpr a
+    transapp :: FactorExpr a -> a
+
+instance LambdaFun (Expr a) where
+    trans    = id
+    transapp = id
+
+instance (LambdaFun b, FactorExpr b ~ Expr (StripExpr b))=> LambdaFun (Expr a -> b) where
+    trans    f = Lam $ trans <$> f
+    transapp e = \v -> transapp $ App' e v
 
 --------------------------------------------------------------------------------
 -- Stdlib
